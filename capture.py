@@ -1,22 +1,35 @@
-#!/Users/skylershaw/.platformio/penv/bin/python3
+#!/usr/bin/env python3
 """Capture the WeAct listen sketch's CSV output to a SavvyCAN-importable file.
 
 Usage: ./capture.py [label] [seconds]   -> captures/<timestamp>-<label>.csv
-Ctrl-C to stop, or give a duration in seconds.
+Ctrl-C to stop, or give a duration in seconds. Needs pyserial
+(pip install -r requirements.txt). The board is found automatically
+(macOS /dev/cu.usbmodem*, Linux /dev/ttyACM* or /dev/ttyUSB*); override
+with CAN_PORT=/dev/... in the environment.
 
 Resets the board on open so the timestamp column starts at zero, strips the
 8-digit zero padding from the ID column (SavvyCAN's importer rejects it, same
 fix as TrooperDuper's tools/decode.py --savvycan), drops the trailing comma,
 and echoes a frame count so you can see it is alive.
 """
-import os, sys, time, serial
+import glob, os, sys, time, serial
 
-PORT = "/dev/cu.usbmodem5C4C0524191"
+def find_port():
+    if os.environ.get("CAN_PORT"):
+        return os.environ["CAN_PORT"]
+    for pat in ("/dev/cu.usbmodem*", "/dev/cu.wchusbserial*", "/dev/ttyACM*", "/dev/ttyUSB*"):
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    sys.exit("no serial port found; plug the WeAct in or set CAN_PORT=/dev/...")
+
+PORT = find_port()
 label = sys.argv[1] if len(sys.argv) > 1 else "capture"
 seconds = float(sys.argv[2]) if len(sys.argv) > 2 else None
 os.makedirs("captures", exist_ok=True)
 path = f"captures/{time.strftime('%Y%m%d-%H%M%S')}-{label}.csv"
 
+print(f"port {PORT}", file=sys.stderr)
 s = serial.Serial(PORT, 115200, timeout=1)
 s.setDTR(False); s.setRTS(True); time.sleep(0.1); s.setRTS(False)  # reset
 

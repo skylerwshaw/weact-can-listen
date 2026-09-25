@@ -23,14 +23,25 @@ transmits, not even ACKs.
 pio run -e weact -t upload      # TF card slot must be empty
 ```
 
-Set `upload_port` / `monitor_port` in `platformio.ini` to your board's port.
+Set `upload_port` / `monitor_port` in `platformio.ini` to your board's port. Only needed to reflash; capturing needs no PlatformIO.
 
 ## Capture
 
+On any machine with Python 3 (the board is already flashed; PlatformIO is
+not needed for capturing):
+
 ```sh
+git clone https://github.com/skylerwshaw/weact-can-listen.git
+cd weact-can-listen
+python3 -m pip install -r requirements.txt   # pyserial
 ./capture.py idle 60            # 60 s to captures/<timestamp>-idle.csv
 ./capture.py heat-cycle         # open-ended, Ctrl-C to stop
 ```
+
+The board is found automatically (macOS `/dev/cu.usbmodem*`, Linux
+`/dev/ttyACM*` or `/dev/ttyUSB*`); override with `CAN_PORT=/dev/...`. On
+Linux add yourself to the `dialout` group (or `uucp` on Arch) and log in
+again for port access.
 
 The script resets the board (timestamps start at zero), strips the zero-padded
 IDs SavvyCAN's importer rejects, and prints a running frame count. Load the

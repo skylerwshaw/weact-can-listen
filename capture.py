@@ -11,8 +11,11 @@ Resets the board on open so the timestamp column starts at zero, strips the
 8-digit zero padding from the ID column (SavvyCAN's importer rejects it, same
 fix as TrooperDuper's tools/decode.py --savvycan), drops the trailing comma,
 and echoes a frame count so you can see it is alive.
+
+While capturing, type a note and press Enter to record what you are doing;
+notes go to captures/<same name>.notes.txt with the capture time in seconds.
 """
-import glob, os, sys, time, serial
+import glob, os, sys, threading, time, serial
 
 def find_port():
     if os.environ.get("CAN_PORT"):
@@ -32,8 +35,24 @@ path = f"captures/{time.strftime('%Y%m%d-%H%M%S')}-{label}.csv"
 print(f"port {PORT}", file=sys.stderr)
 s = serial.Serial(PORT, 115200, timeout=1)
 s.setDTR(False); s.setRTS(True); time.sleep(0.1); s.setRTS(False)  # reset
+# Drop anything the board printed before the reset (stale timestamps) and
+# everything up to the fresh CSV header.
+time.sleep(0.5); s.reset_input_buffer()
 
 frames = 0
+header_seen = False
+t_start = time.time()
+notes_path = path[:-4] + ".notes.txt"
+
+def note_reader():
+    for line in sys.stdin:
+        line = line.strip()
+        if line:
+            with open(notes_path, "a") as nf:
+                nf.write(f"{time.time() - t_start:7.1f}s  {line}\n")
+            print(f"  noted at {time.time() - t_start:.1f}s", file=sys.stderr)
+threading.Thread(target=note_reader, daemon=True).start()
+
 with open(path, "w") as f:
     try:
         t0 = time.time()
@@ -42,7 +61,11 @@ with open(path, "w") as f:
             if not line:
                 continue
             if line.startswith("Time Stamp"):
-                f.write(line + "\n")
+                if not header_seen:
+                    f.write(line + "\n"); header_seen = True
+                continue
+            if not header_seen:
+                continue                             # pre-reset leftovers
             elif line.startswith("#"):
                 print(line, file=sys.stderr)          # driver alerts
             elif "," in line and not line.startswith(("ets ", "rst:", "load:", "entry", "configsip", "clk_drv", "mode:")):

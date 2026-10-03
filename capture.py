@@ -7,12 +7,15 @@ Ctrl-C to stop, or give a duration in seconds. Needs pyserial
 (macOS /dev/cu.usbmodem*, Linux /dev/ttyACM* or /dev/ttyUSB*); override
 with CAN_PORT=/dev/... in the environment.
 
-Resets the board on open so the timestamp column starts at zero, writes the
-SavvyCAN header itself and drops every row until the first post-reset frame
-(timestamp under 5 s), strips the 8-digit zero padding from the ID column
-(SavvyCAN's importer rejects it, same fix as TrooperDuper's tools/decode.py
---savvycan), drops the trailing comma, and echoes a frame count so you can
-see it is alive.
+Does NOT reset the board: every capture that opened with a DTR/RTS reset
+(2026-09-25 afternoon onward) begins with the heater re-initialising its bus
+session (0x625 D3 steps, 0x2C4 reports the 500 placeholder, the Pro replays
+its reconnect burst), and the morning captures without the reset do not. The
+ESP32 glitches the bus while it boots. Instead the first frame's timestamp
+becomes zero. Writes the SavvyCAN header itself, strips the 8-digit zero
+padding from the ID column (SavvyCAN's importer rejects it, same fix as
+TrooperDuper's tools/decode.py --savvycan), drops the trailing comma, and
+echoes a frame count so you can see it is alive.
 
 While capturing, type a note and press Enter to record what you are doing;
 notes go to captures/<same name>.notes.txt with the capture time in seconds.
@@ -35,12 +38,13 @@ os.makedirs("captures", exist_ok=True)
 path = f"captures/{time.strftime('%Y%m%d-%H%M%S')}-{label}.csv"
 
 print(f"port {PORT}", file=sys.stderr)
-s = serial.Serial(PORT, 115200, timeout=1)
-s.setDTR(False); s.setRTS(True); time.sleep(0.1); s.setRTS(False)  # reset
+s = serial.Serial(PORT, 115200, timeout=1, dsrdtr=False, rtscts=False)
+s.setDTR(False); s.setRTS(False)   # hold both low: no reset, no bootloader
+s.reset_input_buffer()
 
 HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8"
 frames = 0
-synced = False   # True once a frame with a post-reset timestamp has arrived
+t_board0 = None   # first frame's board timestamp (µs), becomes zero
 t_start = time.time()
 notes_path = path[:-4] + ".notes.txt"
 
@@ -67,10 +71,9 @@ with open(path, "w") as f:
                 cols = line.rstrip(",").split(",")
                 if len(cols) < 6 or not cols[0].isdigit():
                     continue
-                if not synced:
-                    if int(cols[0]) > 5_000_000:      # µs; pre-reset leftover
-                        continue
-                    synced = True
+                if t_board0 is None:
+                    t_board0 = int(cols[0])
+                cols[0] = str(int(cols[0]) - t_board0)
                 cols[1] = cols[1].lstrip("0") or "0"  # 00000625 -> 625
                 f.write(",".join(cols) + "\n")
                 frames += 1

@@ -1,0 +1,7 @@
+   24.1s  heater started for 20 mins
+   88.6s  heater has been starting up for a bit
+  116.1s  now spooling up higher
+  130.8s  gradually increasing rpms
+  138.3s  now stable rpm sound
+  147.1s  spinning down a bit
+  168.5s  turning on the heater blower to sool the loop now

@@ -7,10 +7,12 @@ Ctrl-C to stop, or give a duration in seconds. Needs pyserial
 (macOS /dev/cu.usbmodem*, Linux /dev/ttyACM* or /dev/ttyUSB*); override
 with CAN_PORT=/dev/... in the environment.
 
-Resets the board on open so the timestamp column starts at zero, strips the
-8-digit zero padding from the ID column (SavvyCAN's importer rejects it, same
-fix as TrooperDuper's tools/decode.py --savvycan), drops the trailing comma,
-and echoes a frame count so you can see it is alive.
+Resets the board on open so the timestamp column starts at zero, writes the
+SavvyCAN header itself and drops every row until the first post-reset frame
+(timestamp under 5 s), strips the 8-digit zero padding from the ID column
+(SavvyCAN's importer rejects it, same fix as TrooperDuper's tools/decode.py
+--savvycan), drops the trailing comma, and echoes a frame count so you can
+see it is alive.
 
 While capturing, type a note and press Enter to record what you are doing;
 notes go to captures/<same name>.notes.txt with the capture time in seconds.
@@ -35,12 +37,10 @@ path = f"captures/{time.strftime('%Y%m%d-%H%M%S')}-{label}.csv"
 print(f"port {PORT}", file=sys.stderr)
 s = serial.Serial(PORT, 115200, timeout=1)
 s.setDTR(False); s.setRTS(True); time.sleep(0.1); s.setRTS(False)  # reset
-# Drop anything the board printed before the reset (stale timestamps) and
-# everything up to the fresh CSV header.
-time.sleep(0.5); s.reset_input_buffer()
 
+HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8"
 frames = 0
-header_seen = False
+synced = False   # True once a frame with a post-reset timestamp has arrived
 t_start = time.time()
 notes_path = path[:-4] + ".notes.txt"
 
@@ -54,28 +54,28 @@ def note_reader():
 threading.Thread(target=note_reader, daemon=True).start()
 
 with open(path, "w") as f:
+    f.write(HEADER + "\n")
     try:
         t0 = time.time()
         while seconds is None or time.time() - t0 < seconds:
             line = s.readline().decode("utf-8", "replace").rstrip("\r\n")
-            if not line:
+            if not line or line.startswith("Time Stamp"):
                 continue
-            if line.startswith("Time Stamp"):
-                if not header_seen:
-                    f.write(line + "\n"); header_seen = True
-                continue
-            if not header_seen:
-                continue                             # pre-reset leftovers
-            elif line.startswith("#"):
+            if line.startswith("#"):
                 print(line, file=sys.stderr)          # driver alerts
             elif "," in line and not line.startswith(("ets ", "rst:", "load:", "entry", "configsip", "clk_drv", "mode:")):
                 cols = line.rstrip(",").split(",")
-                if len(cols) >= 6:
-                    cols[1] = cols[1].lstrip("0") or "0"  # 00000625 -> 625
-                    f.write(",".join(cols) + "\n")
-                    frames += 1
-                    if frames % 100 == 0:
-                        print(f"\r{frames} frames", end="", file=sys.stderr)
+                if len(cols) < 6 or not cols[0].isdigit():
+                    continue
+                if not synced:
+                    if int(cols[0]) > 5_000_000:      # µs; pre-reset leftover
+                        continue
+                    synced = True
+                cols[1] = cols[1].lstrip("0") or "0"  # 00000625 -> 625
+                f.write(",".join(cols) + "\n")
+                frames += 1
+                if frames % 100 == 0:
+                    print(f"\r{frames} frames", end="", file=sys.stderr)
     except KeyboardInterrupt:
         pass
 print(f"\n{frames} frames -> {path}", file=sys.stderr)

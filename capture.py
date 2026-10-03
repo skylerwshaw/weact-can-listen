@@ -38,8 +38,10 @@ os.makedirs("captures", exist_ok=True)
 path = f"captures/{time.strftime('%Y%m%d-%H%M%S')}-{label}.csv"
 
 print(f"port {PORT}", file=sys.stderr)
-s = serial.Serial(PORT, 115200, timeout=1, dsrdtr=False, rtscts=False)
-s.setDTR(False); s.setRTS(False)   # hold both low: no reset, no bootloader
+# pyserial asserts DTR and RTS together on open; the auto-reset circuit only
+# fires when they differ, so leave them alone (toggling them one at a time
+# is exactly the reset we are avoiding).
+s = serial.Serial(PORT, 115200, timeout=1)
 s.reset_input_buffer()
 
 HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8"

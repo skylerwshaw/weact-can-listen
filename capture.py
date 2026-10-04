@@ -68,6 +68,7 @@ else:
 HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8"
 frames = 0
 t_board0 = None   # first frame's board timestamp (µs), becomes zero
+t_prev = None     # previous frame's zeroed timestamp, for gap warnings
 t_start = time.time()
 notes_path = path[:-4] + ".notes.txt"
 
@@ -97,6 +98,9 @@ with open(path, "w") as f:
                 if t_board0 is None:
                     t_board0 = int(cols[0])
                 cols[0] = str((int(cols[0]) - t_board0) % (1 << 32))   # micros() wraps at 71 min
+                if t_prev is not None and int(cols[0]) - t_prev > 1_000_000:
+                    print(f"\n# gap of {(int(cols[0]) - t_prev) / 1e6:.1f} s at {int(cols[0]) / 1e6:.1f} s (link dropped?)", file=sys.stderr)
+                t_prev = int(cols[0])
                 cols[1] = cols[1].lstrip("0") or "0"  # 00000625 -> 625
                 f.write(",".join(cols) + "\n")
                 frames += 1

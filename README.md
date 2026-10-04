@@ -25,6 +25,21 @@ pio run -e weact -t upload      # TF card slot must be empty
 
 Set `upload_port` / `monitor_port` in `platformio.ini` to your board's port. Only needed to reflash; capturing needs no PlatformIO.
 
+### ESPHome alternative
+
+The board can instead run a listen-only ESPHome node that logs the same CSV
+lines, so captures can be taken over Wi-Fi with no USB cable (see
+`CAN_SOURCE` below). That node's YAML is not in this repo. Flash it over
+USB-C with the tap unplugged from the harness, since the ESP32 glitches the
+bus while it boots:
+
+```sh
+uvx --from esphome esphome run path/to/your-node.yaml
+```
+
+Then plug the tap back in and watch the log for idle traffic and a sane
+coolant temperature.
+
 ## Capture
 
 On any machine with Python 3 (the board is already flashed; PlatformIO is
@@ -43,7 +58,20 @@ The board is found automatically (macOS `/dev/cu.usbmodem*`, Linux
 Linux add yourself to the `dialout` group (or `uucp` on Arch) and log in
 again for port access.
 
-The script resets the board (timestamps start at zero), strips the zero-padded
-IDs SavvyCAN's importer rejects, and prints a running frame count. Load the
-CSV in SavvyCAN with File -> Load. Bitrate is fixed at 500 kbit/s in
+To read from an ESPHome node's log over Wi-Fi instead of USB, set
+`CAN_SOURCE` to any command that prints the CSV lines; the ESPHome log prefix
+is stripped:
+
+```sh
+CAN_SOURCE="uvx --from esphome esphome logs path/to/your-node.yaml" ./capture.py idle
+```
+
+The script does not reset the board (a reset makes the heater re-initialise
+its bus session); the first frame's timestamp becomes zero instead. It writes
+the SavvyCAN header, strips the zero-padded IDs SavvyCAN's importer rejects,
+prints a running frame count, and warns on any gap over 1 s between frames
+(a dropped link). Type a note and press Enter while capturing to log what you
+are doing to `captures/<same name>.notes.txt`, stamped with the capture time.
+
+Load the CSV in SavvyCAN with File -> Load. Bitrate is fixed at 500 kbit/s in
 `src/main.cpp`; change `TWAI_TIMING_CONFIG_500KBITS()` for other buses.

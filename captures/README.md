@@ -19,6 +19,7 @@ from board reset.
 | `20261003-131050-full-cycle.csv` | 1066 s. Heater powered up at 12.6 s (already at 69 °C from an earlier run), Pro read and cleared a stored DTC at 54 to 57 s, start at 88.0 s, control pause 302 to 422 s, stop at 988.4 s, after-run to 1048 s. First 4 rows are stale pre-reset lines; header is on line 5 |
 | `20261003-141210-residual-heat.csv` | 42 s. Residual heat mode selected on the Pro at 18.1 s with the coolant at 41 °C; the heater declined within 5 s and the Pro showed nothing |
 | `20261003-141857-warm-start-residual.csv` | 1285 s. Start at 24.0 s from 40 °C with a 20 min timer, control pause 723 to 843 s, timer stop at 1224.4 s, after-run to 1284.6 s. Residual heat was not attempted despite the name. Notes file alongside |
+| `20261004-105319-cold-start-residual.csv` | 2184 s. First capture without the board reset (first row is a real reading, no re-init). Cold start at 4.8 s from 23.7 °C with a 30 min timer, pauses 973 to 1093 s and 1672 to 1792 s, timer stop at 1806 s with no after-run, residual heat accepted 1868 to 2143 s. Notes alongside |
 
 ## Findings, 2026-09-25
 
@@ -189,10 +190,30 @@ orange). Selected at 18.1 s of `residual-heat` with the coolant at 41 °C:
 | 23.2 s | D1 `41` → `C1`, one frame |
 | 23.5 s | `0x54` back to idle; D1 → `03` |
 
-So bit `0x40` in D1 marks residual-heat mode and `0xC1` is the heater
-declining (coolant below its threshold, which is therefore above 41 °C).
-Not yet captured: an accepted request with the loop hot, for the running
-state value and the real cutoff.
+Accepted on 2026-10-04 (`cold-start-residual`) with the coolant at 70 °C,
+62 s after a heat run ended:
+
+| Time | Bus |
+|------|-----|
+| 1867.9 s | `0x54` → `01 03 …`; `0x625` D3 blips `11` → `10` → `11` and `0x2C4` D5/D6 shows the `500` placeholder for one frame: the heater re-initialises on the mode change |
+| 1868.7 s | `0x2C4` D1 `03` → `81`, D2 `00`, and stays there |
+| 1868 to 2143 s | Coolant 66.2 → 57.5 °C, about 2 °C/min with the pump circulating and the cabin blower on |
+| 2143.3 s | Pro OFF; D1 → `03` next frame, no after-run |
+
+So D1 `0x81` is residual heat running, `0x41` the request being evaluated,
+`0xC1` the request ending or declined. The decline threshold is somewhere
+between 41 and 70 °C. A decoder should treat the one-frame `500` after any
+mode change like the power-up placeholder.
+
+### Cold start and the after-run
+
+From 23.7 °C: state `05` at 5.0 s, coolant 39 °C at 60 s and 63.5 °C at
+120 s, so ignition inside the first minute, no slower than the warm start.
+Pauses at 82.7 °C both times (973 s, 1672 s), restarts commanded at 71.9 and
+71.6 °C. The 30 min timer stopped it at 1806 s, 14 s after a restart was
+commanded and before the burner had lit: D1 went `05` → `03` with D2 `00`,
+**no after-run**. The 60 s after-run (D2 `08`) only follows a burning
+burner.
 
 ### The Pro reads P-codes over UDS, and a listener sees it
 
@@ -224,10 +245,8 @@ Undecoded; only matters for step 3.
 
 ### Still to capture
 
-- Residual heat accepted, with the loop hot: the running D1 value and the
-  temperature it cuts out at.
-- A true cold start (coolant at ambient) for glow time and anything the
-  heater does differently before ignition when cold. Low priority.
+- Residual heat left on until the heater ends it itself, for the cut-out
+  temperature and whether it leaves via `0xC1`.
 - `0x19 02 08` sent by the node itself, to see whether it needs session
   `0x61` first (needs a transmitting sketch).
 - The Pro's own boot (power-cycle the Pro alone), only for step 3.

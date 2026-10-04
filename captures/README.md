@@ -16,6 +16,9 @@ from board reset.
 | `20260925-125604-fail-start.csv` | 310 s. Heater/Pro re-init at the start, start pressed at 19.7 s, safety-time fault at 257.9 s, after-run to 318 s. First 4 data rows are stale pre-reset lines (fixed in `capture.py` afterwards); skip them |
 | `20260925-130553-clear-fault.csv` | 58 s. Fault cleared from the Pro at 15.2 s |
 | `20260925-133019-temp-check.csv` | 30 s while the Pro's screen read 30 °C; the calibration capture |
+| `20261003-131050-full-cycle.csv` | 1066 s. Heater powered up at 12.6 s (already at 69 °C from an earlier run), Pro read and cleared a stored DTC at 54 to 57 s, start at 88.0 s, control pause 302 to 422 s, stop at 988.4 s, after-run to 1048 s. First 4 rows are stale pre-reset lines; header is on line 5 |
+| `20261003-141210-residual-heat.csv` | 42 s. Residual heat mode selected on the Pro at 18.1 s with the coolant at 41 °C; the heater declined within 5 s and the Pro showed nothing |
+| `20261003-141857-warm-start-residual.csv` | 1285 s. Start at 24.0 s from 40 °C with a 20 min timer, control pause 723 to 843 s, timer stop at 1224.4 s, after-run to 1284.6 s. Residual heat was not attempted despite the name. Notes file alongside |
 
 ## Findings, 2026-09-25
 
@@ -107,9 +110,13 @@ is the next thing to try for real P-codes.
 
 ### Heater power-up handshake (start of the 5-minute capture)
 
-The heater's fuse was pulled and reinserted after the capture started, so
-this is a clean record of the heater booting under a running Pro. The first
-frames show the heater's `0x625` D3 session counter step
+This looked like the heater's fuse being pulled and reinserted, but every
+capture opened with `capture.py`'s board reset (this one onward) starts the
+same way, and the morning captures without the reset do not: the WeAct
+glitches the bus while the ESP32 boots and the heater re-initialises its
+session. The reset is gone from `capture.py` as of 2026-10-04. Either way
+it is a clean record of the heater re-initialising under a running Pro. The
+first frames show the heater's `0x625` D3 session counter step
 `10` → `11`, `0x2C4` D5/D6 at a placeholder `500` (`F4 01`) for the first
 frames before the real reading appears, and the Pro repeating
 `0x5C` to `0x63` four times at 150 ms. TrooperDuper only saw the long
@@ -136,11 +143,91 @@ first seconds after heater power-up.
 `0x65` bursts came at 7, 47, 86 and 200 s, not every 10 s, with D3 cycling
 1, 2, 3 and D1/D2 carrying the Pro's current reading.
 
+## Findings, 2026-10-03 (metering pump replaced, heater runs)
+
+Two full heat runs (`full-cycle`, `warm-start-residual`) and one declined
+residual-heat request.
+
+### A heat run, on the bus
+
+| Time (`warm-start-residual`) | Bus | Meaning |
+|------|-----|---------|
+| 24.0 s | `0x54` → `01 01 FE FF FE FF 00 00` | Pro commands heat |
+| 24.2 s | `0x2C4` D1 `03` → `05`, D2 `00` | Heater running, burner start sequence |
+| 60 to 90 s | D5/D6 jumps 44.7 → 64.5 °C | Burner lit; the only flame evidence there is |
+| 723.2 s | D2 `00` → `08` at 82.7 °C | Control pause: burner and blower off, water pump on |
+| 843.2 s | D2 `08` → `00` at 72.0 °C | Burner restart commanded; coolant keeps falling 2 to 2.5 min more, then jumps |
+| 1224.4 s | `0x54` → idle, D1 `05` → `03`, D2 `08` | Pro's 20 min timer ends heating; after-run |
+| 1264.4 s | `0x625` D2 `00` → `10` | Last 20 s of the after-run, as in September |
+| 1284.6 s | D2 `08` → `00`, `0x625` D2 → `00` | Pump off, heater idle |
+
+The `full-cycle` run matches: pause at 82.7 °C (302.3 s), restart at 75.5 °C
+(422.3 s), 60 s after-run after the stop. So:
+
+- **There is no flame bit.** D2 `00` in state `05` covers glow, ignition, and
+  steady burning alike (the September dead-pump start sat in `05`/`00` for
+  238 s with no flame). Burner-on is "state `05` and D2 `00`"; actual flame
+  shows only as the coolant slope.
+- **D2 `08` is "burner off, unit still active"**, not a fault flag: control
+  pause during a run, after-run after a stop or a fault. The September fault
+  was D3 `20` for one frame; D2 `08` after it was just the after-run. A
+  decoder latches D3 and treats D2 on its own as burner state.
+- **Regulation band**: pause at 82.7 °C both runs, restart commanded at 72
+  to 75.5 °C. The TD's 75 °C is the middle of the band.
+- Ignition shows up in D5/D6 about 40 to 60 s after a cold-ish start and
+  2 to 2.5 min after a pause restart.
+
+### Residual heat mode (pump plus cabin blower, no burner)
+
+Enabled on this Pro (heater icon in a circle in the menu bar; LED ring
+orange). Selected at 18.1 s of `residual-heat` with the coolant at 41 °C:
+
+| Time | Bus |
+|------|-----|
+| 18.1 s | `0x54` → `01 03 FE FF FE FF 00 00`: D2 `03` is the residual-heat mode (heat is `01`) |
+| 18.2 s | `0x2C4` D1 `03` → `41` |
+| 23.2 s | D1 `41` → `C1`, one frame |
+| 23.5 s | `0x54` back to idle; D1 → `03` |
+
+So bit `0x40` in D1 marks residual-heat mode and `0xC1` is the heater
+declining (coolant below its threshold, which is therefore above 41 °C).
+Not yet captured: an accepted request with the loop hot, for the running
+state value and the real cutoff.
+
+### The Pro reads P-codes over UDS, and a listener sees it
+
+At 54 s of `full-cycle` the Pro queried the heater before clearing it:
+
+```
+7A0  03 19 02 01 AA AA AA AA   ReadDTCInformation, reportDTCByStatusMask 0x01
+73C  03 59 02 7B               none
+7A0  03 19 02 08 AA AA AA AA   mask 0x08 (confirmed DTCs)
+73C  07 59 02 7B 00 02 11 28   one DTC: 00 02 11, status 0x28
+```
+
+DTC bytes `00 02 11` are what the Pro shows as P000211, presumably the
+dead-pump fault from September. The clear followed at 57.5 s (session
+`0x61`, SecurityAccess level `0x65`, key `00 00 10 61` for the third time)
+and the same query at 1044 s, after the stop, returned nothing. Padding byte
+is `AA`. A read-only node therefore gets P-codes for free whenever the Pro
+is used to look at them; sending `19 02 08` itself needs session `0x61`
+first (the Pro opened it before the clear, not before the read, so the read
+may work without it).
+
+### Pro reconnect burst, second form
+
+`warm-start-residual` has the Pro replaying `0x64 0x66 0x6D 0x10A 0x67 0x68`
+alongside `0x5C` to `0x63`; the other captures only show the `0x5C` to
+`0x63` plus `0x66`/`0x10A` set. Payloads: `0x64` `3C 00 05 00 C8 00 FF 03`,
+`0x67`/`0x68` `BE 3E 27 00 01 1E 00 00`, `0x6D` `12 00 00 00 00 00 00 F0`.
+Undecoded; only matters for step 3.
+
 ### Still to capture
 
-- `0x19` ReadDTCInformation after unlocking, to see whether the S3 returns
-  P-codes (needs a transmitting sketch; not the listen-only one).
-- A successful start once the pump is replaced: flame flag in D2, and
-  whatever D5/D6 does as the coolant heats to 75 °C.
-- The Pro's boot: the `0x5C` to `0x10A` init burst, absent here because the
-  Pro was already running.
+- Residual heat accepted, with the loop hot: the running D1 value and the
+  temperature it cuts out at.
+- A true cold start (coolant at ambient) for glow time and anything the
+  heater does differently before ignition when cold. Low priority.
+- `0x19 02 08` sent by the node itself, to see whether it needs session
+  `0x61` first (needs a transmitting sketch).
+- The Pro's own boot (power-cycle the Pro alone), only for step 3.

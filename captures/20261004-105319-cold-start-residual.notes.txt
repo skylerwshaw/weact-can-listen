@@ -1,0 +1,2 @@
+ 1904.1s  turned on residual heat ~20 seconds ago
+ 2139.0s  residual heat off
